@@ -38,7 +38,7 @@ enum kr_cache_tag {
 enum kr_cache_rank {
 	KR_RANK_BAD       = 0,  /* BAD cache, do not use. */ 
 	KR_RANK_INSECURE  = 1,  /* Entry is DNSSEC insecure (e.g. RRSIG not exists). */
-	KR_RANK_ADDT      = 4,  /* Entry from additional section. */
+	KR_RANK_EXTRA     = 4,  /* Entry from additional section. */
 	KR_RANK_NONAUTH   = 8,  /* Entry from authority section (i.e. parent-side). */
 	KR_RANK_AUTH      = 16, /* Entry from answer (authoritative data). */
 	KR_RANK_SECURE    = 32, /* Entry is DNSSEC valid (e.g. RRSIG exists). */

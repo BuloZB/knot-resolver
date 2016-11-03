@@ -48,8 +48,8 @@ static void adjust_ttl(knot_rrset_t *rr, uint32_t drift)
 
 static int loot_cache_pkt(struct kr_cache *cache, knot_pkt_t *pkt,
 			  const knot_dname_t *qname, uint16_t rrtype,
-			  bool want_secure, uint32_t timestamp,
-			  uint8_t *flags, bool use_bad_cache)
+			  uint8_t lowest_rank, uint32_t timestamp,
+			  uint8_t *flags)
 {
 	struct kr_cache_entry *entry = NULL;
 	int ret = kr_cache_peek(cache, KR_CACHE_PKT, qname, rrtype, &entry, &timestamp);
@@ -57,8 +57,8 @@ static int loot_cache_pkt(struct kr_cache *cache, knot_pkt_t *pkt,
 		return ret;
 	}
 
-	/* Check that we have secure rank. */
-	if (want_secure && entry->rank != KR_RANK_SECURE && !use_bad_cache) {
+	/* Check if we have eligible rank. */
+	if (entry->rank < lowest_rank) {
 		return kr_error(ENOENT);
 	}
 
@@ -100,10 +100,19 @@ static int loot_pktcache(struct kr_cache *cache, knot_pkt_t *pkt,
 	uint32_t timestamp = qry->timestamp.tv_sec;
 	const knot_dname_t *qname = qry->sname;
 	uint16_t rrtype = qry->stype;
-	const bool want_secure = (qry->flags & QUERY_DNSSEC_WANT);
-	bool use_bad_cache = knot_wire_get_cd(req->answer->wire);
-	return loot_cache_pkt(cache, pkt, qname, rrtype, want_secure,
-			      timestamp, flags, use_bad_cache);
+	/* Set the lowest allowed rank.
+	 * By default we are looking for DNSSEC valid entries only.
+	 * (secured queries with cd bit cleared) */
+	uint8_t lowest_rank = KR_RANK_SECURE;
+	if (knot_wire_get_cd(req->answer->wire)) {
+		/* if validation disabled, use BAD cache. */
+		lowest_rank = KR_RANK_BAD;
+	} else if (!(qry->flags & QUERY_DNSSEC_WANT)) {
+		/* if not secured, look for all possible entries except BAD. */
+		lowest_rank = KR_RANK_INSECURE;
+	}
+	return loot_cache_pkt(cache, pkt, qname, rrtype, lowest_rank,
+			      timestamp, flags);
 }
 
 static int pktcache_peek(knot_layer_t *ctx, knot_pkt_t *pkt)
@@ -216,12 +225,13 @@ static int pktcache_stash(knot_layer_t *ctx, knot_pkt_t *pkt)
 
 	/* Set cache rank.
 	 * If cd bit is set rank remains BAD.
-           Otherwise - depends on flags. */
+         * Otherwise - depends on flags. */
 	if (!knot_wire_get_cd(req->answer->wire)) {
-		if (qry->flags & QUERY_DNSSEC_WANT &&
-		   !(qry->flags & QUERY_DNSSEC_INSECURE)) {
+		if (qry->flags & QUERY_DNSSEC_WANT) {
+			/* DNSSEC valid entry */
 			header.rank = KR_RANK_SECURE;
 		} else {
+			/* Don't care about DNSSEC */
 			header.rank = KR_RANK_INSECURE;
 		}
 	}

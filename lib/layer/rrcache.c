@@ -41,7 +41,7 @@ static inline bool is_expiring(const knot_rrset_t *rr, uint32_t drift)
 
 static int loot_rr(struct kr_cache *cache, knot_pkt_t *pkt, const knot_dname_t *name,
                   uint16_t rrclass, uint16_t rrtype, struct kr_query *qry,
-                  uint8_t *rank, uint8_t *flags, bool fetch_rrsig, bool use_badcache)
+                  uint8_t *rank, uint8_t *flags, bool fetch_rrsig, uint8_t lowest_rank)
 {
 	/* Check if record exists in cache */
 	int ret = 0;
@@ -57,7 +57,7 @@ static int loot_rr(struct kr_cache *cache, knot_pkt_t *pkt, const knot_dname_t *
 		return ret;
 	}
 
-	if (!use_badcache && *rank == KR_RANK_BAD) {
+	if (rank && (*rank < lowest_rank)) {
 		return kr_error(ENOENT);
 	}
 
@@ -95,18 +95,19 @@ static int loot_rr(struct kr_cache *cache, knot_pkt_t *pkt, const knot_dname_t *
 /** @internal Try to find a shortcut directly to searched record. */
 static int loot_rrcache(struct kr_cache *cache, knot_pkt_t *pkt,
 			struct kr_query *qry, uint16_t rrtype,
-			bool dobit, bool cdbit)
+			const bool dobit, const bool cdbit)
 {
 	/* Lookup direct match first */
 	uint8_t rank  = 0;
 	uint8_t flags = 0;
+	uint8_t lowest_rank = cdbit ? KR_RANK_BAD : KR_RANK_INSECURE;
 	int ret = loot_rr(cache, pkt, qry->sname, qry->sclass, rrtype, qry,
-			  &rank, &flags, 0, cdbit);
+			  &rank, &flags, 0, lowest_rank);
 	if (ret != 0 && rrtype != KNOT_RRTYPE_CNAME) {
 		/* Chase CNAME if no direct hit */
 		rrtype = KNOT_RRTYPE_CNAME;
 		ret = loot_rr(cache, pkt, qry->sname, qry->sclass, rrtype, qry,
-			      &rank, &flags, 0, cdbit);
+			      &rank, &flags, 0, lowest_rank);
 	}
 	/* Record is flagged as INSECURE => doesn't have RRSIG. */
 	if (ret == 0 && (rank & KR_RANK_INSECURE)) {
@@ -115,7 +116,7 @@ static int loot_rrcache(struct kr_cache *cache, knot_pkt_t *pkt,
 	/* Record may have RRSIG, try to find it. */
 	} else if (ret == 0 && dobit) {
 		ret = loot_rr(cache, pkt, qry->sname, qry->sclass, rrtype, qry,
-			      &rank, &flags, true, cdbit);
+			      &rank, &flags, true, lowest_rank);
 	}
 	return ret;
 }
@@ -131,8 +132,8 @@ static int rrcache_peek(knot_layer_t *ctx, knot_pkt_t *pkt)
 	if (qry->ns.addr[0].ip.sa_family != AF_UNSPEC) {
 		return ctx->state; /* Only lookup before asking a query */
 	}
-	bool secured = (qry->flags & QUERY_DNSSEC_WANT);
-	bool cd_is_set = knot_wire_get_cd(req->answer->wire);
+	const bool secured = (qry->flags & QUERY_DNSSEC_WANT);
+	const bool cd_is_set = knot_wire_get_cd(req->answer->wire);
 	/* Reconstruct the answer from the cache,
 	 * it may either be a CNAME chain or direct answer.
 	 * Only one step of the chain is resolved at a time.
@@ -250,7 +251,7 @@ static void stash_glue(map_t *stash, knot_pkt_t *pkt, const knot_dname_t *ns_nam
 		    !knot_dname_is_equal(rr->owner, ns_name)) {
 			continue;
 		}
-		kr_rrmap_add(stash, rr, KR_RANK_ADDT, pool);
+		kr_rrmap_add(stash, rr, KR_RANK_EXTRA, pool);
 	}
 }
 
@@ -259,8 +260,8 @@ static void stash_ds(struct kr_request *req, knot_pkt_t *pkt, map_t *stash, knot
 {
 	struct kr_query *qry = req->current_query;
 	uint8_t rank = KR_RANK_NONAUTH;
-	if (knot_pkt_has_dnssec(req->answer) && knot_wire_get_cd(req->answer->wire)) {
-		/* If secured, but signature validation is disabled,
+	if (knot_wire_get_cd(req->answer->wire)) {
+		/* Signature validation is disabled,
 		 * save it to the BAD cache */
 		rank = KR_RANK_BAD;
 	}
@@ -277,8 +278,8 @@ static int stash_authority(struct kr_request *req, knot_pkt_t *pkt, map_t *stash
 {
 	struct kr_query *qry = req->current_query;
 	uint8_t rank = KR_RANK_NONAUTH;
-	if (knot_pkt_has_dnssec(req->answer) && knot_wire_get_cd(req->answer->wire)) {
-		/* If secured, but signature validation is disabled,
+	if (knot_wire_get_cd(req->answer->wire)) {
+		/* Signature validation is disabled,
 		 * save authority to the BAD cache */
 		rank = KR_RANK_BAD;
 	}
@@ -311,8 +312,8 @@ static int stash_answer(struct kr_request *req, knot_pkt_t *pkt, map_t *stash, k
 		cname_begin = qry->sname;
 	}
 	uint8_t rank = KR_RANK_AUTH;
-	if (knot_pkt_has_dnssec(req->answer) && knot_wire_get_cd(req->answer->wire)) {
-		/* Secured, but signature validation is disabled.
+	if (knot_wire_get_cd(req->answer->wire)) {
+		/* Signature validation is disabled.
 		 * Save answer to the BAD cache. */
 		rank = KR_RANK_BAD;
 	}
