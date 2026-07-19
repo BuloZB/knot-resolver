@@ -65,11 +65,15 @@ struct kr_cdb_api {
 	 * \return error code - accepting RW transactions can fail with LMDB.
 	 */
 	int (*commit)(kr_cdb_pt db, struct kr_cdb_stats *stat, bool accept_rw, bool reset_ro);
+	/** Run before a row of operations to ensure they happen in a single RW transaction,
+	 *   at least in case of successes. */
+	int (*txn_open_rw)(kr_cdb_pt db, struct kr_cdb_stats *stat/*unused*/);
 
 	/* Data access */
 
 	int (*read)(kr_cdb_pt db, struct kr_cdb_stats *stat,
 			const knot_db_val_t *key, knot_db_val_t *val, int maxcount);
+	/* TODO: the behavior of write() around transactions is a bit complex. */
 	int (*write)(kr_cdb_pt db, struct kr_cdb_stats *stat, const knot_db_val_t *key,
 			knot_db_val_t *val, int maxcount);
 
@@ -111,13 +115,19 @@ struct kr_cdb_api {
 	int (*check_health)(kr_cdb_pt db, struct kr_cdb_stats *stat);
 
 
-	/** Start iterating; return the first *val with *key.
+	/** Start iterating: get the first *val with *key + return error code.
 	 *
-	 * This only makes sense if !is_cache.
-	 * TODO: it only works inside RO transactions for now.
+	 * - in cache: ensures a RO transaction (and commits the RW txn if any)
+	 * - in ruledb: transaction is preserved if exists, otherwise RO txn gets opened
 	 */
 	int (*it_first)(kr_cdb_pt db, struct kr_cdb_stats *stat,
 			const knot_db_val_t *key, knot_db_val_t *val);
-	/** Advance to the next *val with the same key. */
+	/** Advance to the next *val with the same key.  Return error code. */
 	int (*it_next)(kr_cdb_pt db, struct kr_cdb_stats *stat, knot_db_val_t *val);
+	/** Delete the current *val + return error code.
+	 *
+	 * You can it_next() to continue.
+	 * This assumed that you got it_first() in a RW txn.
+	 */
+	int (*it_del)(kr_cdb_pt db, struct kr_cdb_stats *stat);
 };
